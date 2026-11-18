@@ -29,7 +29,7 @@ const TRANSLATE_GAP_MS = 1_000;
 const FETCH_TIMEOUT_MS = 30_000;
 const LOCAL_NEWS = 3;                         // aramanın gövdesine giren ülke haberi
 const LOCAL_BUDGET = 100;                     // çalışma başına ülke haberi araması (Google News Actions'tan ~150 istekte 429 veriyor)
-const LOCAL_STALE_MS = 6 * 3_600_000;         // ülke haberleri bu kadar eskiyince arama yeniden yapılır
+const LOCAL_STALE_MS = 12 * 3_600_000;        // ülke haberleri bu kadar eskiyince arama yeniden yapılır
 const LOCAL_KEEP_MS = 2 * 86_400_000;         // trendden düşmüş aramanın sonucu en çok bu kadar saklanır
 
 // news: Google News'in dil ve ülke parametreleri (gl Trends'in ülke kodu ve bayrak olur); lang: içerik İngilizce ya da Türkçeyse
@@ -360,10 +360,12 @@ async function main() {
   if (failed === countries.length * 2) throw new Error('Hiçbir liste alınamadı; yayın yapılmadı.');
 
   // 2. Ülke haberleri (fetchLocal). Her arama bir kez, LOCAL_STALE_MS eskiyince yeniden aranır; önce hiç aranmamışlar, ülkeler sırayla
-  // (her ülkenin ilk araması, sonra ikincisi…). Bütçe biterse ya da Google News 429/503 verirse kalanı sonraki çalışmaya kalır.
+  // ve her ülkede arama hacmi büyükten küçüğe (her ülkenin en çok aranan sözü, sonra ikincisi…). Bütçe biterse ya da Google News
+  // 429/503 verirse kalanı sonraki çalışmaya kalır.
   state.local ??= {};
   const queue = [], current = new Set();
-  for (const country of countries) (lists.get(country.slug).searches ?? []).forEach((s, i) => {
+  const volume = s => Number(s.traffic.replace(/\D/g, '')) || 0;
+  for (const country of countries) [...(lists.get(country.slug).searches ?? [])].sort((a, b) => volume(b) - volume(a)).forEach((s, i) => {
     const key = `${country.slug}|${keyOf(s.query)}`, kept = state.local[key];
     current.add(key);
     if (!kept || now - kept.at > LOCAL_STALE_MS) queue.push({ country, s, key, rank: kept ? 1 : 0, i });
