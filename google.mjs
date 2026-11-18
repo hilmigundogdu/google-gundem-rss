@@ -149,19 +149,26 @@ async function fetchSearches(country) {
 // ([[çeviri, dil], …]). Önce İngilizceye: dil İngilizce ya da Türkçeyse, belirlenemediyse ya da çeviri özgünün aynısıysa (özel ad)
 // çeviri gerekmez; kalanlar Türkçeye de çevrilir.
 
-async function translate(texts, target) {
+// source verilirse yanıt yalnız metinlerdir; dil olarak source döner.
+async function translate(texts, target, source = 'auto') {
   const body = new URLSearchParams(texts.map(q => ['q', q]));
-  const res = await fetch(`${TRANSLATE}?client=gtx&sl=auto&tl=${target}`, {
+  const res = await fetch(`${TRANSLATE}?client=gtx&sl=${source}&tl=${target}`, {
     method: 'POST', body, headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Google Translate HTTP ${res.status}`);
   const data = await res.json();
   const list = texts.length === 1 && typeof data?.[0] === 'string' ? [data] : data;
   if (!Array.isArray(list) || list.length !== texts.length) throw new Error('Google Translate yanıtı beklenen biçimde değil.');
-  return list.map(([text, lang]) => ({ text: String(text ?? ''), lang: String(lang ?? '') }));
+  return list.map(item => (typeof item === 'string' ? [item, source] : item))
+    .map(([text, lang]) => ({ text: String(text ?? ''), lang: String(lang ?? (source === 'auto' ? '' : source)) }));
 }
 
-async function translateAll(texts, cache) {
+const LATIN = /\p{Script=Latin}/u;
+const UNTRANSLATED = ['en', 'tr', 'auto', 'und', ''];
+
+// hints: metin → ülkenin dili. Latin harfi olmayan kısa metni Google bazen İngilizce sanıp çevirmiyor (西野亮廣 → "en");
+// böyle metinler ülkenin diliyle ayrıca çevrilir.
+async function translateAll(texts, cache, hints) {
   const chunks = [];
   for (const text of texts) {
     const last = chunks.at(-1);
@@ -172,12 +179,23 @@ async function translateAll(texts, cache) {
   for (const chunk of chunks) {
     if (requests) await sleep(TRANSLATE_GAP_MS);
     const en = await translate(chunk, 'en'); requests++;
-    const foreign = chunk.filter((text, i) => en[i].lang && !['en', 'tr', 'auto', 'und'].includes(en[i].lang) && !sameText(en[i].text, text));
-    let tr = [];
-    if (foreign.length) { await sleep(TRANSLATE_GAP_MS); tr = await translate(foreign, 'tr'); requests++; }
+    const tr = new Map();
+    const missed = chunk.filter((text, i) => UNTRANSLATED.includes(en[i].lang) && !LATIN.test(text) && hints.get(text) && !UNTRANSLATED.includes(hints.get(text)));
+    for (const lang of new Set(missed.map(text => hints.get(text)))) {
+      const group = missed.filter(text => hints.get(text) === lang);
+      await sleep(TRANSLATE_GAP_MS);
+      const [enAgain, trAgain] = [await translate(group, 'en', lang), await translate(group, 'tr', lang)]; requests += 2;
+      group.forEach((text, k) => { en[chunk.indexOf(text)] = enAgain[k]; tr.set(text, trAgain[k].text); });
+    }
+    const foreign = chunk.filter((text, i) => !UNTRANSLATED.includes(en[i].lang) && !sameText(en[i].text, text));
+    const rest = foreign.filter(text => !tr.has(text));
+    if (rest.length) {
+      await sleep(TRANSLATE_GAP_MS);
+      (await translate(rest, 'tr')).forEach((t, k) => tr.set(rest[k], t.text)); requests++;
+    }
     chunk.forEach((text, i) => {
-      const at = foreign.indexOf(text), trText = at >= 0 ? tr[at].text : null;
-      cache[text] = at < 0 ? { lang: en[i].lang, en: null, tr: null }
+      const trText = tr.get(text);
+      cache[text] = !foreign.includes(text) ? { lang: en[i].lang, en: null, tr: null }
         : { lang: en[i].lang, en: en[i].text, tr: trText && !sameText(trText, text) ? trText : null };
     });
   }
@@ -194,8 +212,8 @@ const has = t => Boolean(t?.en || t?.tr);
 
 function headlineItem(country, h, translations) {
   const t = translations[h.title], lines = [];
-  if (has(t)) lines.push(`<p>${translated(t)}</p>`, '<hr>');
   const others = h.cluster.filter(c => !sameText(c.title, h.title));
+  if (has(t)) lines.push(`<p>${translated(t)}</p>`, ...(others.length ? ['<hr>'] : []));
   if (others.length) lines.push('<p><b>Aynı olayı yazanlar</b></p>',
     `<ul>\n${others.map(c => `<li>${link(c.url, c.title)}${c.source ? ` — ${esc(c.source)}` : ''}</li>`).join('\n')}\n</ul>`);
   lines.push(`<p><small>${flag(country.gl)} ${esc(country.name)} · Google News manşeti · ${esc(h.source || 'kaynak')}${h.at ? ` · ${time(h.at)}` : ''}`
@@ -214,7 +232,7 @@ function searchItem(country, s, translations) {
   const rows = s.news.map(n => ({ n, t: translations[n.title] })).filter(r => has(r.t));
   if (has(t)) lines.push(`<p>${translated(t)}</p>`);
   if (rows.length) lines.push(`<ul>\n${rows.map(r => `<li>${translated(r.t, r.n.url)}${r.n.source ? ` — ${esc(r.n.source)}` : ''}</li>`).join('\n')}\n</ul>`);
-  if (has(t) || rows.length) lines.push('<hr>');
+  if ((has(t) || rows.length) && (s.picture || s.news.length)) lines.push('<hr>');
   if (s.picture) lines.push(`<p><img src="${esc(s.picture)}" alt="${esc(s.pictureSource)}"></p>`);
   if (s.news.length) lines.push(`<ul>\n${s.news.map(n => `<li>${link(n.url, n.title)}${n.source ? ` — ${esc(n.source)}` : ''}</li>`).join('\n')}\n</ul>`);
   const lang = has(t) ? t.lang : rows[0]?.t.lang;
@@ -291,20 +309,23 @@ async function main() {
 
   // 2. Çeviri: dili İngilizce ya da Türkçe olmayan ülkelerde manşet başlığı, aranan söz ve aramanın haber başlıkları. Saklanan çeviri
   // bir kez çevrilir; beslemede kalmayan metnin çevirisi silinir.
-  const wanted = new Set(), todo = [];
+  const wanted = new Set(), todo = [], hints = new Map();
   for (const country of countries) {
     if (country.lang === 'en' || country.lang === 'tr') continue;
     const { headlines = [], searches = [] } = lists.get(country.slug);
     for (const text of [...headlines.map(h => h.title), ...searches.flatMap(s => [asked(s.query), ...s.news.map(n => n.title)])]) {
       if (wanted.has(text)) continue;
       wanted.add(text);
-      if (!state.translations[text]) todo.push(text);
+      hints.set(text, country.lang);
+      const kept = state.translations[text];
+      // Eski sürümün İngilizce sanıp çevirmediği Latin dışı metin yeniden çevrilir.
+      if (!kept || (UNTRANSLATED.includes(kept.lang) && !LATIN.test(text))) todo.push(text);
     }
   }
   for (const text of Object.keys(state.translations)) if (!wanted.has(text)) delete state.translations[text];
   if (todo.length) {
     let requests = 0;
-    try { requests = await translateAll(todo, state.translations); }
+    try { requests = await translateAll(todo, state.translations, hints); }
     catch (e) { console.log(`Çeviri yarıda kaldı: ${e.message}`); }
     console.log(`Çeviri: ${todo.filter(text => state.translations[text]).length}/${todo.length} metin${requests ? `, ${requests} istek` : ''}.`);
   }
