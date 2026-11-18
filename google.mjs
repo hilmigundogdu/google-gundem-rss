@@ -341,17 +341,17 @@ async function main() {
   for (const country of countries) {
     const { headlines, searches } = lists.get(country.slug);
     const name = `${flag(country.gl)} ${country.name}`;
-    if (!headlines) await carry(`manset-${country.slug}.xml`, `Google Manşet · ${country.name}`);
-    if (!searches) await carry(`arama-${country.slug}.xml`, `Google Arama · ${country.name}`);
+    if (!headlines) await carry(`manset-${country.slug}.xml`, `${name} - Google Manşet`);
+    if (!searches) await carry(`arama-${country.slug}.xml`, `${name} - Google Arama`);
     if (headlines) {
-      const file = `manset-${country.slug}.xml`, title = `Google Manşet · ${country.name}`;
+      const file = `manset-${country.slug}.xml`, title = `${name} - Google Manşet`;
       await writeFile(join(outDir, file), render({ file, title, link: `https://news.google.com/?${country.news}`,
         description: `${name}: Google News'in öne çıkan haberleri, İngilizce ve Türkçe çeviriyle.` },
         headlines.map(h => headlineItem(country, h, state.translations)), now));
       files.push({ file, title });
     }
     if (searches) {
-      const file = `arama-${country.slug}.xml`, title = `Google Arama · ${country.name}`;
+      const file = `arama-${country.slug}.xml`, title = `${name} - Google Arama`;
       await writeFile(join(outDir, file), render({ file, title, link: `https://trends.google.com/trending?geo=${country.gl}`,
         description: `${name}: Google Trends'te o an trend olan aramalar, İngilizce ve Türkçe çeviriyle.` },
         searches.map(s => searchItem(country, s, state.translations)), now));
