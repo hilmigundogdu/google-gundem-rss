@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Google'ın ülke ülke iki listesini RSS 2.0 beslemelerine çevirir (Node 22):
 //   manşetler: Google News'in "Öne çıkanlar" listesi; her öğe bir olay ve onu yazan kaynaklar (Google'ın kümesi),
-//   aramalar:  Google Trends'in o an trend olan aramaları; tahmini arama hacmi ve ilgili haberlerle.
+//   aramalar:  Google Trends'in o an trend olan aramaları; tahmini arama hacmi, ülkenin Google News'inde o sözle çıkan haberler ve
+//              Trends'in eşleştirdiği haberlerle.
 // Başlık özgün kalır; dili İngilizce ya da Türkçe olmayan öğenin gövdesi İngilizce ve Türkçe çeviriyle başlar (Google Translate'in
 // anahtarsız ucu). Kimlik gerekmez.
 //
-// Ortam:  BASE_URL  yayımlanmış sitenin adresi; önceki durum (çeviriler) BASE_URL/state.json'dan okunur.
+// Ortam:  BASE_URL  yayımlanmış sitenin adresi; önceki durum (çeviriler, ülke haberleri) BASE_URL/state.json'dan okunur.
 //         OUT_DIR   çıktı klasörü (varsayılan: public).
 // Yerel deneme:  node google.mjs [--prev eski/state.json] [--out klasor] [--countries almanya,japonya]
 
@@ -17,6 +18,8 @@ import { parseArgs } from 'node:util';
 const REPO = 'https://github.com/hilmigundogdu/google-gundem-rss';
 const USER_AGENT = `google-gundem-rss/1.0 (+${REPO})`;
 const NEWS = 'https://news.google.com/rss';
+const SEARCH = 'https://news.google.com/rss/search';
+const ENGLISH_NEWS = 'hl=en-US&gl=US&ceid=US:en';
 const TRENDS = 'https://trends.google.com/trending/rss';
 const TRANSLATE = 'https://translate.googleapis.com/translate_a/t';
 const HEADLINES = 20;                         // ülke başına beslemeye giren manşet (Google'ın sırasıyla)
@@ -24,6 +27,10 @@ const GAP_MS = 1_000;                         // Google News ve Trends istekleri
 const TRANSLATE_BATCH = 40, TRANSLATE_CHARS = 4_000; // bir çeviri isteğindeki en çok metin ve karakter
 const TRANSLATE_GAP_MS = 1_000;
 const FETCH_TIMEOUT_MS = 30_000;
+const LOCAL_NEWS = 3;                         // aramanın gövdesine giren ülke haberi
+const LOCAL_BUDGET = 100;                     // çalışma başına ülke haberi araması (Google News Actions'tan ~150 istekte 429 veriyor)
+const LOCAL_STALE_MS = 6 * 3_600_000;         // ülke haberleri bu kadar eskiyince arama yeniden yapılır
+const LOCAL_KEEP_MS = 2 * 86_400_000;         // trendden düşmüş aramanın sonucu en çok bu kadar saklanır
 
 // news: Google News'in dil ve ülke parametreleri (gl Trends'in ülke kodu ve bayrak olur); lang: içerik İngilizce ya da Türkçeyse
 // çeviri denenmez, null (çok dilli) ya da başka dilse metin metin dil tespitiyle çevrilir. X Gündem'in bölgeleriyle aynı; Dünya yok
@@ -74,6 +81,9 @@ const INVALID_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g;
 const esc = s => String(s).replace(INVALID_XML, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const cdata = s => `<![CDATA[${String(s).replace(INVALID_XML, '').replace(/]]>/g, ']]]]><![CDATA[>')}]]>`;
 const keyOf = s => s.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+const LATIN = /\p{Script=Latin}/u;
+const fold = s => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+const latinOnly = s => [...s].filter(c => /\p{L}/u.test(c)).every(c => LATIN.test(c));
 const flag = gl => String.fromCodePoint(...gl.split('').map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
 const number = n => new Intl.NumberFormat('tr-TR').format(n);
 const sameText = (a, b) => keyOf(a) === keyOf(b);
@@ -81,6 +91,8 @@ const sameText = (a, b) => keyOf(a) === keyOf(b);
 // ("apple störungen" → "Apple aksaklıkları", küçük harfle "elma aksaklıkları").
 const asked = query => query.replace(/(^|[\s-])(\p{Ll})/gu, (m, gap, c) => gap + c.toLocaleUpperCase());
 const LANG_NAMES = new Intl.DisplayNames(['tr'], { type: 'language' });
+const REGION_EN = new Intl.DisplayNames(['en'], { type: 'region' });
+const SHORT_EN = { US: 'US', GB: 'UK', AE: 'UAE' };
 const langName = code => { try { return LANG_NAMES.of(code); } catch { return code; } };
 
 function time(ms) {
@@ -99,10 +111,11 @@ async function get(url) {
 const field = (xml, tag) => decode(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`).exec(xml)?.[1] ?? '').trim();
 const items = xml => [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(m => m[1]);
 
-// ---- Durum: önceki çalışmanın state.json'u; translations[özgün metin] = { lang, en, tr } (çeviri gerekmiyorsa en ve tr null).
+// ---- Durum: önceki çalışmanın state.json'u; translations[özgün metin] = { lang, en, tr } (çeviri gerekmiyorsa en ve tr null),
+// local["ülke|arama"] = { at, news: [{ title, source, url }] } (ülke haberleri, at: arandığı an).
 
 async function loadState() {
-  const empty = { version: 1, translations: {} };
+  const empty = { version: 1, translations: {}, local: {} };
   let raw;
   if (args.prev) raw = JSON.parse(await readFile(args.prev, 'utf8'));
   else if (!process.env.BASE_URL) return empty;
@@ -115,27 +128,58 @@ async function loadState() {
   return { ...empty, ...raw };
 }
 
-// ---- Google News manşetleri: başlık "Başlık - Kaynak"; açıklama olayın kümesi (<ol><li><a>başlık</a> <font>kaynak</font></li>…).
+// ---- Google News: başlık "Başlık - Kaynak"; manşetin açıklaması olayın kümesi (<ol><li><a>başlık</a> <font>kaynak</font></li>…).
+
+function newsItem(item) {
+  const source = field(item, 'source');
+  let title = field(item, 'title');
+  // Yayıncı adı bazen iki kez eklenir ("… - Wirtschaft - SZ.de - SZ.de").
+  while (source && title.endsWith(` - ${source}`) && title.length > source.length + 3) title = title.slice(0, -source.length - 3).trim();
+  const cluster = [...field(item, 'description').matchAll(/<li><a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>(?:\s|&nbsp;)*(?:<font[^>]*>([\s\S]*?)<\/font>)?/g)]
+    .map(([, url, t, s]) => ({ url: decode(url), title: decode(t).trim(), source: decode(s ?? '').trim() }));
+  return { id: field(item, 'guid'), title, source, url: field(item, 'link'), at: Date.parse(field(item, 'pubDate')) || null, cluster };
+}
+
+class HttpError extends Error {
+  constructor(what, status) { super(`${what} HTTP ${status}`); this.status = status; }
+}
 
 async function fetchHeadlines(country) {
   const res = await get(`${NEWS}?${country.news}`);
-  if (!res.ok) throw new Error(`Google News HTTP ${res.status}`);
-  return items(res.body).slice(0, HEADLINES).map(item => {
-    const source = field(item, 'source');
-    let title = field(item, 'title');
-    // Yayıncı adı bazen iki kez eklenir ("… - Wirtschaft - SZ.de - SZ.de").
-    while (source && title.endsWith(` - ${source}`) && title.length > source.length + 3) title = title.slice(0, -source.length - 3).trim();
-    const cluster = [...field(item, 'description').matchAll(/<li><a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>(?:\s|&nbsp;)*(?:<font[^>]*>([\s\S]*?)<\/font>)?/g)]
-      .map(([, url, t, s]) => ({ url: decode(url), title: decode(t).trim(), source: decode(s ?? '').trim() }));
-    return { id: field(item, 'guid'), title, source, url: field(item, 'link'), at: Date.parse(field(item, 'pubDate')) || null, cluster };
-  }).filter(h => h.id && h.title);
+  if (!res.ok) throw new HttpError('Google News', res.status);
+  return items(res.body).slice(0, HEADLINES).map(newsItem).filter(h => h.id && h.title);
+}
+
+// Google arama sözünü gevşek eşleştirir ("england vs australia" UAE → Abu Dhabi'deki başka maçlar, "armando gonzález" → Armando León):
+// başlıkta sözün en uzun sözcüğü (eşit uzunlukta birden çoksa hepsi) geçmeli, büyük-küçük harf ve aksan gözetilmez ("public holiday" → "National Day Holiday").
+function mentions(title, query) {
+  const words = fold(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (!words.length) return true;
+  const longest = Math.max(...words.map(w => [...w].length)), text = fold(title);
+  return words.filter(w => [...w].length === longest).every(w => text.includes(w));
+}
+
+// Ülke haberleri: Trends'in haberleri aranan söze dünya genelinde uyan haberlerdir; genel bir sözde başka ülkeden gelir (BAE'de
+// "public holiday" → ABD'de bir ışık festivali). Söz o ülkenin Google News'inde son 24 saatte aranır. Yalnız Latin harfli söz Arapça,
+// İbranice, Japonca, Korece ya da Rusça haberlerde bulunmaz; o zaman İngilizce haberlerde ülke adıyla aranır ("public holiday" UAE).
+// Aynı başlık bir kez girer.
+async function fetchLocal(country, query) {
+  const [q, params] = latinOnly(query) && /hl=(ar|he|ja|ko|ru)\b/.test(country.news)
+    ? [`"${query}" ${SHORT_EN[country.gl] ?? REGION_EN.of(country.gl)}`, ENGLISH_NEWS] : [query, country.news];
+  const res = await get(`${SEARCH}?q=${encodeURIComponent(`${q} when:1d`)}&${params}`);
+  if (!res.ok) throw new HttpError('Google News', res.status);
+  const seen = new Set();
+  return items(res.body).map(newsItem)
+    .filter(n => n.title && n.url && mentions(n.title, query))
+    .filter(n => !seen.has(keyOf(n.title)) && seen.add(keyOf(n.title)))
+    .slice(0, LOCAL_NEWS).map(({ title, source, url }) => ({ title, source, url }));
 }
 
 // ---- Google Trends aramaları: <ht:approx_traffic>, <ht:picture>, <ht:news_item> (başlık, adres, kaynak, görsel).
 
 async function fetchSearches(country) {
   const res = await get(`${TRENDS}?geo=${country.gl}`);
-  if (!res.ok) throw new Error(`Google Trends HTTP ${res.status}`);
+  if (!res.ok) throw new HttpError('Google Trends', res.status);
   return items(res.body).map(item => ({
     query: field(item, 'title'), traffic: field(item, 'ht:approx_traffic'), at: Date.parse(field(item, 'pubDate')) || null,
     picture: field(item, 'ht:picture'), pictureSource: field(item, 'ht:picture_source'),
@@ -163,7 +207,6 @@ async function translate(texts, target, source = 'auto') {
     .map(([text, lang]) => ({ text: String(text ?? ''), lang: String(lang ?? (source === 'auto' ? '' : source)) }));
 }
 
-const LATIN = /\p{Script=Latin}/u;
 const UNTRANSLATED = ['en', 'tr', 'auto', 'und', ''];
 
 // hints: metin → ülkenin dili. Latin harfi olmayan kısa metni Google bazen İngilizce sanıp çevirmiyor (西野亮廣 → "en");
@@ -227,15 +270,24 @@ function headlineItem(country, h, translations) {
 function searchItem(country, s, translations) {
   const google = `https://www.google.com/search?q=${encodeURIComponent(s.query)}&gl=${country.gl}`;
   const trends = `https://trends.google.com/trends/explore?q=${encodeURIComponent(s.query)}&geo=${country.gl}&date=now%201-d`;
-  const t = translations[asked(s.query)], lines = [];
-  // Gövde çeviriyle başlar: önce aranan söz, sonra haber başlıkları (kaynağıyla, habere bağlı).
-  const rows = s.news.map(n => ({ n, t: translations[n.title] })).filter(r => has(r.t));
-  if (has(t)) lines.push(`<p>${translated(t)}</p>`);
-  if (rows.length) lines.push(`<ul>\n${rows.map(r => `<li>${translated(r.t, r.n.url)}${r.n.source ? ` — ${esc(r.n.source)}` : ''}</li>`).join('\n')}\n</ul>`);
-  if ((has(t) || rows.length) && (s.picture || s.news.length)) lines.push('<hr>');
-  if (s.picture) lines.push(`<p><img src="${esc(s.picture)}" alt="${esc(s.pictureSource)}"></p>`);
-  if (s.news.length) lines.push(`<ul>\n${s.news.map(n => `<li>${link(n.url, n.title)}${n.source ? ` — ${esc(n.source)}` : ''}</li>`).join('\n')}\n</ul>`);
-  const lang = has(t) ? t.lang : rows[0]?.t.lang;
+  const t = translations[asked(s.query)], local = s.local ?? [];
+  const rowsOf = list => list.map(n => ({ n, t: translations[n.title] })).filter(r => has(r.t));
+  const localRows = rowsOf(local), trendRows = rowsOf(s.news);
+  const by = n => (n.source ? ` — ${esc(n.source)}` : '');
+  const ul = rows => `<ul>\n${rows.join('\n')}\n</ul>`;
+  // Ülke haberi varsa iki bölüm başlıkla ayrılır; Trends'in görseli kendi haberlerine aittir, onların yanında durur.
+  const LOCAL = '<p><b>Ülkedeki haberler</b></p>', TRENDS = local.length ? ["<p><b>Google Trends'in haberleri</b></p>"] : [];
+  // Üstte çeviriler: aranan söz, sonra haber başlıkları (kaynağıyla, habere bağlı). Altta görsel ve özgün başlıklar.
+  const top = [], bottom = [];
+  if (has(t)) top.push(`<p>${translated(t)}</p>`);
+  if (localRows.length) top.push(LOCAL, ul(localRows.map(r => `<li>${translated(r.t, r.n.url)}${by(r.n)}</li>`)));
+  if (trendRows.length) top.push(...TRENDS, ul(trendRows.map(r => `<li>${translated(r.t, r.n.url)}${by(r.n)}</li>`)));
+  if (local.length) bottom.push(LOCAL, ul(local.map(n => `<li>${link(n.url, n.title)}${by(n)}</li>`)));
+  if (s.picture || s.news.length) bottom.push(...TRENDS);
+  if (s.picture) bottom.push(`<p><img src="${esc(s.picture)}" alt="${esc(s.pictureSource)}"></p>`);
+  if (s.news.length) bottom.push(ul(s.news.map(n => `<li>${link(n.url, n.title)}${by(n)}</li>`)));
+  const lines = [...top, ...(top.length && bottom.length ? ['<hr>'] : []), ...bottom];
+  const lang = has(t) ? t.lang : (localRows[0] ?? trendRows[0])?.t.lang;
   lines.push(`<p><small>${flag(country.gl)} ${esc(country.name)} · Google'da ${esc(s.traffic || '?')} arama${s.at ? ` · başlangıç ${time(s.at)}` : ''}`
     + `${lang ? ` · ${esc(langName(lang))}` : ''} · ${link(google, "Google'da ara")} · ${link(trends, 'Trends')}</small></p>`);
   return {
@@ -307,13 +359,42 @@ async function main() {
   }
   if (failed === countries.length * 2) throw new Error('Hiçbir liste alınamadı; yayın yapılmadı.');
 
-  // 2. Çeviri: dili İngilizce ya da Türkçe olmayan ülkelerde manşet başlığı, aranan söz ve aramanın haber başlıkları. Saklanan çeviri
+  // 2. Ülke haberleri (fetchLocal). Her arama bir kez, LOCAL_STALE_MS eskiyince yeniden aranır; önce hiç aranmamışlar, ülkeler sırayla
+  // (her ülkenin ilk araması, sonra ikincisi…). Bütçe biterse ya da Google News 429/503 verirse kalanı sonraki çalışmaya kalır.
+  state.local ??= {};
+  const queue = [], current = new Set();
+  for (const country of countries) (lists.get(country.slug).searches ?? []).forEach((s, i) => {
+    const key = `${country.slug}|${keyOf(s.query)}`, kept = state.local[key];
+    current.add(key);
+    if (!kept || now - kept.at > LOCAL_STALE_MS) queue.push({ country, s, key, rank: kept ? 1 : 0, i });
+  });
+  queue.sort((a, b) => a.rank - b.rank || a.i - b.i);
+  let used = 0, done = 0, stop = '';
+  for (const job of queue) {
+    if (used >= LOCAL_BUDGET) { stop = 'bütçe doldu'; break; }
+    await sleep(GAP_MS);
+    used++;
+    try { state.local[job.key] = { at: now, news: await fetchLocal(job.country, job.s.query) }; done++; }
+    catch (e) {
+      if (e.status === 429 || e.status === 503) { stop = e.message; break; }
+      console.log(`${job.country.name} "${job.s.query}" ülke haberleri alınamadı: ${e.message}`);
+    }
+  }
+  if (queue.length) console.log(`Ülke haberleri: ${done}/${queue.length} arama güncellendi, ${used} istek${stop ? `; ${stop}, kalanı sonraki çalışmaya` : ''}.`);
+  for (const [key, kept] of Object.entries(state.local)) if (now - kept.at > LOCAL_KEEP_MS || (!failed && !current.has(key))) delete state.local[key];
+  // Trends'in de verdiği haber ülke haberlerinden çıkar.
+  for (const country of countries) for (const s of lists.get(country.slug).searches ?? []) {
+    s.local = (state.local[`${country.slug}|${keyOf(s.query)}`]?.news ?? [])
+      .filter(n => !s.news.some(m => m.url === n.url || sameText(m.title, n.title)));
+  }
+
+  // 3. Çeviri: dili İngilizce ya da Türkçe olmayan ülkelerde manşet başlığı, aranan söz ve aramanın haber başlıkları. Saklanan çeviri
   // bir kez çevrilir; bütün listeler alındıysa beslemede kalmayan metnin çevirisi silinir.
   const wanted = new Set(), todo = [], hints = new Map();
   for (const country of countries) {
     if (country.lang === 'en' || country.lang === 'tr') continue;
     const { headlines = [], searches = [] } = lists.get(country.slug);
-    for (const text of [...headlines.map(h => h.title), ...searches.flatMap(s => [asked(s.query), ...s.news.map(n => n.title)])]) {
+    for (const text of [...headlines.map(h => h.title), ...searches.flatMap(s => [asked(s.query), ...s.local.map(n => n.title), ...s.news.map(n => n.title)])]) {
       if (wanted.has(text)) continue;
       wanted.add(text);
       hints.set(text, country.lang);
@@ -331,7 +412,7 @@ async function main() {
     console.log(`Çeviri: ${todo.filter(text => state.translations[text]).length}/${todo.length} metin${requests ? `, ${requests} istek` : ''}.`);
   }
 
-  // 3. Yazma.
+  // 4. Yazma.
   await mkdir(outDir, { recursive: true });
   const files = [];
   const carry = async (file, title) => {
