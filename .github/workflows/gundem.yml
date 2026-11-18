@@ -1,10 +1,10 @@
 name: Google gündem RSS
 
-# Yalnız zamanlayıcı ve elle tetikleme. Asıl tetikleyici Mac mini'deki launchd işidir (GitHub zamanlayıcısı */30'u günde
-# birkaç kez başlatıyor); cron yedektir.
+# Yalnız zamanlayıcı ve elle tetikleme. Asıl tetikleyici Mac mini'deki launchd işidir (2 saatte bir; GitHub zamanlayıcısı
+# zamanlanmış işi günde birkaç kez başlatıyor); cron yedektir.
 on:
   schedule:
-    - cron: '*/30 * * * *'   # besleme
+    - cron: '15 */2 * * *'   # besleme (2 saatte bir, x-gundem-rss'le çakışmasın diye :15)
     - cron: '47 3 * * *'     # günlük canlı tutma (60 gün etkinliksizlikte zamanlanmış iş kapanmasın)
   workflow_dispatch:
 

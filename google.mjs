@@ -33,7 +33,8 @@ const LOCAL_STALE_MS = 12 * 3_600_000;        // ülke haberleri bu kadar eskiyi
 const LOCAL_KEEP_MS = 2 * 86_400_000;         // trendden düşmüş aramanın sonucu en çok bu kadar saklanır
 
 // news: Google News'in dil ve ülke parametreleri (gl Trends'in ülke kodu ve bayrak olur); lang: içerik İngilizce ya da Türkçeyse
-// çeviri denenmez, null (çok dilli) ya da başka dilse metin metin dil tespitiyle çevrilir. X Gündem'in bölgeleriyle aynı; Dünya yok
+// çeviri denenmez, null (çok dilli) ya da başka dilse metin metin dil tespitiyle çevrilir. X Gündem'in bölgelerinden 12'si: Türkiye,
+// büyük Avrupa ülkeleri, ABD, Rusya ve Orta Doğu (18 Kas 2026'da 28'den indirildi; Akış'a saatte ~430 öğe geliyordu). Dünya yok
 // (Google'ın dünya listesi yok).
 const COUNTRIES = [
   { slug: 'abd', name: 'ABD', lang: 'en', news: 'hl=en-US&gl=US&ceid=US:en' },
@@ -43,27 +44,11 @@ const COUNTRIES = [
   { slug: 'fransa', name: 'Fransa', lang: 'fr', news: 'hl=fr&gl=FR&ceid=FR:fr' },
   { slug: 'ispanya', name: 'İspanya', lang: 'es', news: 'hl=es&gl=ES&ceid=ES:es' },
   { slug: 'italya', name: 'İtalya', lang: 'it', news: 'hl=it&gl=IT&ceid=IT:it' },
-  { slug: 'hollanda', name: 'Hollanda', lang: 'nl', news: 'hl=nl&gl=NL&ceid=NL:nl' },
-  { slug: 'japonya', name: 'Japonya', lang: 'ja', news: 'hl=ja&gl=JP&ceid=JP:ja' },
-  { slug: 'guney-kore', name: 'Güney Kore', lang: 'ko', news: 'hl=ko&gl=KR&ceid=KR:ko' },
-  { slug: 'hindistan', name: 'Hindistan', lang: null, news: 'hl=en-IN&gl=IN&ceid=IN:en' },
   { slug: 'rusya', name: 'Rusya', lang: 'ru', news: 'hl=ru&gl=RU&ceid=RU:ru' },
-  { slug: 'kanada', name: 'Kanada', lang: 'en', news: 'hl=en-CA&gl=CA&ceid=CA:en' },
-  { slug: 'meksika', name: 'Meksika', lang: 'es', news: 'hl=es-419&gl=MX&ceid=MX:es-419' },
-  { slug: 'brezilya', name: 'Brezilya', lang: 'pt', news: 'hl=pt-BR&gl=BR&ceid=BR:pt-419' },
-  { slug: 'arjantin', name: 'Arjantin', lang: 'es', news: 'hl=es-419&gl=AR&ceid=AR:es-419' },
   { slug: 'suudi-arabistan', name: 'Suudi Arabistan', lang: 'ar', news: 'hl=ar&gl=SA&ceid=SA:ar' },
   { slug: 'bae', name: 'BAE', lang: null, news: 'hl=ar&gl=AE&ceid=AE:ar' },
   { slug: 'israil', name: 'İsrail', lang: 'he', news: 'hl=he&gl=IL&ceid=IL:he' },
   { slug: 'misir', name: 'Mısır', lang: 'ar', news: 'hl=ar&gl=EG&ceid=EG:ar' },
-  { slug: 'nijerya', name: 'Nijerya', lang: 'en', news: 'hl=en-NG&gl=NG&ceid=NG:en' },
-  { slug: 'kenya', name: 'Kenya', lang: 'en', news: 'hl=en-KE&gl=KE&ceid=KE:en' },
-  { slug: 'guney-afrika', name: 'Güney Afrika', lang: 'en', news: 'hl=en-ZA&gl=ZA&ceid=ZA:en' },
-  { slug: 'pakistan', name: 'Pakistan', lang: null, news: 'hl=en-PK&gl=PK&ceid=PK:en' },
-  { slug: 'endonezya', name: 'Endonezya', lang: 'id', news: 'hl=id&gl=ID&ceid=ID:id' },
-  { slug: 'filipinler', name: 'Filipinler', lang: null, news: 'hl=en-PH&gl=PH&ceid=PH:en' },
-  { slug: 'singapur', name: 'Singapur', lang: null, news: 'hl=en-SG&gl=SG&ceid=SG:en' },
-  { slug: 'avustralya', name: 'Avustralya', lang: 'en', news: 'hl=en-AU&gl=AU&ceid=AU:en' },
 ].map(c => ({ ...c, gl: /gl=([A-Z]{2})/.exec(c.news)[1] }));
 
 const { values: args } = parseArgs({ options: { prev: { type: 'string' }, out: { type: 'string' }, countries: { type: 'string' } } });
@@ -307,7 +292,7 @@ function render(channel, list, now) {
     `<description>${esc(channel.description)}</description>`,
     '<language>tr</language>',
     `<lastBuildDate>${date(now)}</lastBuildDate>`,
-    '<ttl>30</ttl>',
+    '<ttl>120</ttl>',
     `<generator>${REPO}</generator>`,
     ...(process.env.BASE_URL ? [`<atom:link href="${esc(baseUrl + channel.file)}" rel="self" type="application/rss+xml"/>`] : []),
   ];

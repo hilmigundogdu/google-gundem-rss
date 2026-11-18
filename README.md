@@ -1,6 +1,6 @@
 # Google gündem RSS
 
-Google'ın ülke ülke iki listesini RSS 2.0 beslemelerine çevirir; [x-gundem-rss](https://github.com/hilmigundogdu/x-gundem-rss)'in Google karşılığıdır, aynı 28 ülke (Dünya yok: Google'ın dünya listesi yok).
+Google'ın ülke ülke iki listesini RSS 2.0 beslemelerine çevirir; [x-gundem-rss](https://github.com/hilmigundogdu/x-gundem-rss)'in Google karşılığıdır. Onun bölgelerinden 12 ülke: Türkiye, ABD, Birleşik Krallık, Almanya, Fransa, İspanya, İtalya, Rusya, Suudi Arabistan, BAE, İsrail ve Mısır (Dünya yok: Google'ın dünya listesi yok).
 
 | Besleme | Adres |
 |---|---|
@@ -24,7 +24,7 @@ Google'ın ülke ülke iki listesini RSS 2.0 beslemelerine çevirir; [x-gundem-r
 
 ## Nasıl çalışır
 
-- GitHub Actions `google.mjs`'i çalıştırır, çıktıyı GitHub Pages'te yayımlar; depoya commit atılmaz. Asıl tetikleyici Mac mini'deki launchd işidir (`local.gundem-tetik`, 30 dakikada bir); depodaki cron yedektir.
+- GitHub Actions `google.mjs`'i çalıştırır, çıktıyı GitHub Pages'te yayımlar; depoya commit atılmaz. Asıl tetikleyici Mac mini'deki launchd işidir (`local.gundem-tetik`, 2 saatte bir, çift saatlerin :15'inde; x-gundem-rss'le aynı anda başlamaz); depodaki cron yedektir. Listeler hızlı döndüğü için 30 dakikada bir çalışınca Akış'a saatte ~430 öğe geliyordu; 2 saatte kısa ömürlü öğelerin çoğu atlanır, kalıcılar gelir.
 - **Manşetler** `news.google.com/rss?hl=…&gl=…&ceid=…`, **aramalar** `trends.google.com/trending/rss?geo=<ülke kodu>` adresinden gelir; kimlik gerekmez. İstekler arasında 1 sn. Bir liste alınamazsa önceki beslemesi Pages'ten aynen taşınır; Google News Actions IP'lerine zaman zaman 503 veriyor, o çalışmada manşetler eski kalır.
 - **Çeviri** Google Translate'in anahtarsız ucundan (`translate_a/t?client=gtx`) 40'arlı istekle gelir: önce İngilizceye; dili İngilizce ya da Türkçe olan, ya da çevirisi aynı kalan (özel ad) metin çevrilmez, kalanlar Türkçeye de çevrilir. Google Trends aramaları küçük harfle verdiği için aranan söz çeviriye baş harfleri büyük gider ("apple störungen" → "Apple aksaklıkları").
 - **Ülke haberleri** her arama için bir kez aranır, 12 saat eskiyince yeniden; önce hiç aranmamışlar, ülkeler sırayla, her ülkede en çok arananlar önce. Google News Actions'tan 40-150 istekte 429 veriyor; ilk doluş birkaç çalışma sürer. Çalışma başına en çok 100 istek; Google News 429 ya da 503 verirse kalanı sonraki çalışmaya kalır.
