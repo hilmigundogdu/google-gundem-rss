@@ -308,7 +308,7 @@ async function main() {
   if (failed === countries.length * 2) throw new Error('Hiçbir liste alınamadı; yayın yapılmadı.');
 
   // 2. Çeviri: dili İngilizce ya da Türkçe olmayan ülkelerde manşet başlığı, aranan söz ve aramanın haber başlıkları. Saklanan çeviri
-  // bir kez çevrilir; beslemede kalmayan metnin çevirisi silinir.
+  // bir kez çevrilir; bütün listeler alındıysa beslemede kalmayan metnin çevirisi silinir.
   const wanted = new Set(), todo = [], hints = new Map();
   for (const country of countries) {
     if (country.lang === 'en' || country.lang === 'tr') continue;
@@ -322,7 +322,8 @@ async function main() {
       if (!kept || (UNTRANSLATED.includes(kept.lang) && !LATIN.test(text))) todo.push(text);
     }
   }
-  for (const text of Object.keys(state.translations)) if (!wanted.has(text)) delete state.translations[text];
+  // Bir liste alınamadıysa önceki beslemesi taşınır; çevirileri de sonraki çalışma için kalır.
+  if (!failed) for (const text of Object.keys(state.translations)) if (!wanted.has(text)) delete state.translations[text];
   if (todo.length) {
     let requests = 0;
     try { requests = await translateAll(todo, state.translations, hints); }

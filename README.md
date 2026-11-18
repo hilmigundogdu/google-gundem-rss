@@ -23,7 +23,7 @@ Google'ın ülke ülke iki listesini RSS 2.0 beslemelerine çevirir; [x-gundem-r
 ## Nasıl çalışır
 
 - GitHub Actions `google.mjs`'i çalıştırır, çıktıyı GitHub Pages'te yayımlar; depoya commit atılmaz. Asıl tetikleyici Mac mini'deki launchd işidir (`local.gundem-tetik`, 30 dakikada bir); depodaki cron yedektir.
-- **Manşetler** `news.google.com/rss?hl=…&gl=…&ceid=…`, **aramalar** `trends.google.com/trending/rss?geo=<ülke kodu>` adresinden gelir; kimlik gerekmez. İstekler arasında 1 sn. Bir liste alınamazsa önceki beslemesi Pages'ten aynen taşınır.
+- **Manşetler** `news.google.com/rss?hl=…&gl=…&ceid=…`, **aramalar** `trends.google.com/trending/rss?geo=<ülke kodu>` adresinden gelir; kimlik gerekmez. İstekler arasında 1 sn. Bir liste alınamazsa önceki beslemesi Pages'ten aynen taşınır; Google News Actions IP'lerine zaman zaman 503 veriyor, o çalışmada manşetler eski kalır.
 - **Çeviri** Google Translate'in anahtarsız ucundan (`translate_a/t?client=gtx`) 40'arlı istekle gelir: önce İngilizceye; dili İngilizce ya da Türkçe olan, ya da çevirisi aynı kalan (özel ad) metin çevrilmez, kalanlar Türkçeye de çevrilir. Google Trends aramaları küçük harfle verdiği için aranan söz çeviriye baş harfleri büyük gider ("apple störungen" → "Apple aksaklıkları").
-- **Durum** `state.json` olarak yayımlanır, yalnız çevirileri taşır: her metin bir kez çevrilir, beslemeden çıkan metnin çevirisi silinir. Yalnız 404 sıfırdan başlatır; başka hatada yayın yapılmaz.
+- **Durum** `state.json` olarak yayımlanır, yalnız çevirileri taşır: her metin bir kez çevrilir, beslemeden çıkan metnin çevirisi silinir (bir liste alınamadıysa silinmez). Yalnız 404 sıfırdan başlatır; başka hatada yayın yapılmaz.
 - Yerel deneme: `node google.mjs --out /tmp/g --countries almanya,japonya` (`--prev state.json` ile önceki çeviriler).
